@@ -55,22 +55,23 @@ class Board(Static):
     }
     """
 
-    numeric_value = reactive("")
-    led_value = reactive(0)
+    _numeric_elem = None
+    _led_elems = []
 
     def compose(self) -> ComposeResult:
+        self._numeric_elem = Label("0", id="numeric_display")
+        self._led_elems = [
+            Label("⚫︎", id="led-6"),
+            Label("⚫︎", id="led-5"),
+            Label("⚫︎", id="led-4"),
+            Label("⚫︎", id="led-3"),
+            Label("⚫︎", id="led-2"),
+            Label("⚫︎", id="led-1"),
+            Label("⚫︎", id="led-0"),
+        ]
         yield Container(
-            Label(self.numeric_value, id="numeric_display"),
-            Container(
-                Label("⚫︎", id="led-6"),
-                Label("⚫︎", id="led-5"),
-                Label("⚫︎", id="led-4"),
-                Label("⚫︎", id="led-3"),
-                Label("⚫︎", id="led-2"),
-                Label("⚫︎", id="led-1"),
-                Label("⚫︎", id="led-0"),
-                id="led",
-            ),
+            self._numeric_elem,
+            Container(*self._led_elems, id="led"),
             Button("C", variant="success", id="btn-c"),
             Button("D", variant="success", id="btn-d"),
             Button("E", variant="success", id="btn-e"),
@@ -94,12 +95,15 @@ class Board(Static):
             id="board",
         )
 
-    def watch_led_value(self, _, new_led) -> None:
+    def update_numeric_led(self, value) -> None:
+        self._numeric_elem.update(str(value))
+
+    def update_binary_led(self, value) -> None:
         for i in range(7):
-            if new_led & (1 << i) == 0:
-                self.query_one(f"#led-{i}").styles.color = "white"
+            if value & (1 << i) == 0:
+                self._led_elems[i].styles.color = "white"
             else:
-                self.query_one(f"#led-{i}").styles.color = "red"
+                self._led_elems[i].styles.color = "red"
 
 
 class VirtualMachineController(Static):
@@ -174,29 +178,36 @@ class VirtualMachineController(Static):
         def render(self) -> str:
             return f"LAST: {self.value}"
 
+    _mem_elems: list[MemoryItem] = []
+    _reg_elems: list[RegisterItem] = []
+    _last_inst_elem = None
+
     def compose(self) -> ComposeResult:
         memory_labels = []
         for i in range(0x10):
             memory_labels.append(Static(f"{i << 4:02X}:"))
             for j in range(0x10):
-                memory_labels.append(self.MemoryItem(id=f"mem-{i:x}-{j:x}"))
+                elem = self.MemoryItem(id=f"mem-{i:x}-{j:x}")
+                memory_labels.append(elem)
+                self._mem_elems.append(elem)
+        self._reg_elems = {
+            "a": self.RegisterItem(reg="A", id="reg-a"),
+            "b": self.RegisterItem(reg="B", id="reg-b"),
+            "y": self.RegisterItem(reg="Y", id="reg-y"),
+            "z": self.RegisterItem(reg="Z", id="reg-z"),
+            "a2": self.RegisterItem(reg="A'", id="reg-a2"),
+            "b2": self.RegisterItem(reg="B'", id="reg-b2"),
+            "y2": self.RegisterItem(reg="Y'", id="reg-y2"),
+            "z2": self.RegisterItem(reg="Z'", id="reg-z2"),
+            "f": self.RegisterItem(reg="F", id="reg-f"),
+            "pc": self.RegisterItem(reg="PC", id="reg-pc"),
+            "sp": self.RegisterItem(reg="SP", id="reg-sp"),
+        }
+        self._last_inst_elem = self.LastInst()
         yield Container(
             Container(*memory_labels, id="memory_view"),
-            Container(
-                self.RegisterItem(reg="A", id="reg-a"),
-                self.RegisterItem(reg="B", id="reg-b"),
-                self.RegisterItem(reg="Y", id="reg-y"),
-                self.RegisterItem(reg="Z", id="reg-z"),
-                self.RegisterItem(reg="A'", id="reg-a2"),
-                self.RegisterItem(reg="B'", id="reg-b2"),
-                self.RegisterItem(reg="Y'", id="reg-y2"),
-                self.RegisterItem(reg="Z'", id="reg-z2"),
-                self.RegisterItem(reg="F", id="reg-f"),
-                self.RegisterItem(reg="PC", id="reg-pc"),
-                self.RegisterItem(reg="SP", id="reg-sp"),
-                id="register_view",
-            ),
-            self.LastInst(),
+            Container(*self._reg_elems.values(), id="register_view"),
+            self._last_inst_elem,
             Button("STEP", id="btn-ctrl-step", variant="primary"),
             Button("RUN", id="btn-ctrl-run", variant="primary"),
             Button("STOP", id="btn-ctrl-stop", variant="primary"),
@@ -206,16 +217,13 @@ class VirtualMachineController(Static):
     def update_memory(self, mem) -> None:
         for i in range(0x10):
             for j in range(0x10):
-                elem = self.query_one(f"#mem-{i:x}-{j:x}")
-                elem.value = mem[i * 0x10 + j]
+                self._mem_elems[i * 0x10 + j].value = mem[i * 0x10 + j]
 
     def update_register(self, name, value) -> None:
-        elem = self.query_one(f"#reg-{name}")
-        elem.value = value
+        self._reg_elems[name].value = value
 
     def update_last_inst(self, inst) -> None:
-        elem = self.query_one(self.LastInst)
-        elem.value = inst
+        self._last_inst_elem.value = inst
 
 
 class MonitorPane(Static):
@@ -232,12 +240,30 @@ class MonitorPane(Static):
     }
     """
 
+    _board_elem = None
+    _controller_elem = None
+
     def compose(self) -> ComposeResult:
-        board = Board()
-        controller = VirtualMachineController()
-        board.border_title = "BOARD"
-        controller.border_title = "CONTROLLER"
-        yield Container(board, controller, id="monitor_pane")
+        self._board_elem = Board()
+        self._controller_elem = VirtualMachineController()
+        self._board_elem.border_title = "BOARD"
+        self._controller_elem.border_title = "CONTROLLER"
+        yield Container(self._board_elem, self._controller_elem, id="monitor_pane")
+
+    def set_numeric_led_value(self, value: int):
+        self._board_elem.update_numeric_led(value)
+
+    def set_binary_led_value(self, value: int):
+        self._board_elem.update_binary_led(value)
+
+    def set_memory(self, mem):
+        self._controller_elem.update_memory(mem)
+
+    def set_register(self, name, value):
+        self._controller_elem.update_register(name, value)
+
+    def set_last_inst(self, value):
+        self._controller_elem.update_last_inst(value)
 
 
 class VirtualMachineMonitor(App):
@@ -247,6 +273,8 @@ class VirtualMachineMonitor(App):
         height: 1fr;
     }
     """
+
+    _monitor_pane = None
 
     def __init__(self, vm: VirtualMachine):
         super().__init__()
@@ -258,9 +286,10 @@ class VirtualMachineMonitor(App):
         self.update()
 
     def compose(self) -> ComposeResult:
+        self._monitor_pane = MonitorPane()
         yield Header()
         with TabbedContent("Monitor", "Config"):
-            yield MonitorPane()
+            yield self._monitor_pane
             yield Label("config")
         yield Footer()
 
@@ -269,9 +298,8 @@ class VirtualMachineMonitor(App):
         self.runner = self.set_interval(1 / self.vm.HZ, self.step, pause=True)
 
     def update(self) -> None:
-        board = self.query_one(Board)
-        board.numeric_value = self.vm.get_numeric_led()
-        board.led_value = self.vm.get_binary_led()
+        self._monitor_pane.set_numeric_led_value(self.vm.get_numeric_led())
+        self._monitor_pane.set_binary_led_value(self.vm.get_binary_led())
 
         mem = [0] * 0x100
         for i in range(0x100):
@@ -292,20 +320,19 @@ class VirtualMachineMonitor(App):
         reg_pc = self.vm.get_reg(Register.PC)
         reg_sp = self.vm.get_reg(Register.SP)
 
-        vmc = self.query_one(VirtualMachineController)
-        vmc.update_memory(mem)
-        vmc.update_register("a", reg_a)
-        vmc.update_register("b", reg_b)
-        vmc.update_register("y", reg_y)
-        vmc.update_register("z", reg_z)
-        vmc.update_register("a2", reg_a2)
-        vmc.update_register("b2", reg_b2)
-        vmc.update_register("y2", reg_y2)
-        vmc.update_register("z2", reg_z2)
-        vmc.update_register("f", reg_f)
-        vmc.update_register("pc", reg_pc)
-        vmc.update_register("sp", reg_sp)
-        vmc.update_last_inst(self.vm.last_inst)
+        self._monitor_pane.set_memory(mem)
+        self._monitor_pane.set_register("a", reg_a)
+        self._monitor_pane.set_register("b", reg_b)
+        self._monitor_pane.set_register("y", reg_y)
+        self._monitor_pane.set_register("z", reg_z)
+        self._monitor_pane.set_register("a2", reg_a2)
+        self._monitor_pane.set_register("b2", reg_b2)
+        self._monitor_pane.set_register("y2", reg_y2)
+        self._monitor_pane.set_register("z2", reg_z2)
+        self._monitor_pane.set_register("f", reg_f)
+        self._monitor_pane.set_register("pc", reg_pc)
+        self._monitor_pane.set_register("sp", reg_sp)
+        self._monitor_pane.set_last_inst(self.vm.last_inst)
 
     def action_quit(self) -> None:
         self.exit()
