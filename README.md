@@ -1,4 +1,4 @@
-# Orange4 Emulator
+# ORANGE-4 Emulator
 
 Emulator for [ORANGE-4](http://www.picosoft.co.jp/ORANGE-4/), a 4-bit microcontroller
 
