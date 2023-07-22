@@ -17,6 +17,7 @@ This demonstration runs the sample code included with the ORANGE-4 IDE.
     [Download](http://www.picosoft.co.jp/ORANGE-4/download/ORANGE4-IDE-V102.zip)
 
 2. Make image file
+
     Copy the results assembled in the IDE to a file.
 
     The following command generates an executable image.
