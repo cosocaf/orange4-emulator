@@ -279,6 +279,7 @@ class VirtualMachineMonitor(App):
         self.vm_lock = threading.Lock()
 
     def step(self):
+        self.vm.set_wait_count(0)
         self.vm.cycle()
         self.vm.release_all_key()
         self.update()
