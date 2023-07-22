@@ -19,7 +19,7 @@ class SystemLayout(IntEnum):
     REGISTER_END = 0x70
     NUMERIC_LED = 0x71
     BINARY_LED = 0x72  # - 0x73 (without MSB)
-    WAIT_COUNT = 0x74
+    WAIT_COUNT = 0x74  # - 0x77
 
 
 class Register(IntEnum):
@@ -184,10 +184,9 @@ class VirtualMachine:
         self.set_mem(SystemLayout.BINARY_LED + 1, value >> 4)
 
     def cycle(self) -> None:
-        if self.get_mem(SystemLayout.WAIT_COUNT) > 0:
-            self.set_mem(
-                SystemLayout.WAIT_COUNT, self.get_mem(SystemLayout.WAIT_COUNT) - 1
-            )
+        wait_count = self.get_wait_count()
+        if wait_count > 0:
+            self.set_wait_count(wait_count - 1)
             return
         opcode = self.get_mem(self.get_reg(Register.PC))
         self._exec_op(opcode)
@@ -245,6 +244,19 @@ class VirtualMachine:
         else:
             self.data[addr // 2] &= 0xF0
             self.data[addr // 2] |= value
+
+    def get_wait_count(self) -> int:
+        count = self.get_mem(SystemLayout.WAIT_COUNT)
+        count |= self.get_mem(SystemLayout.WAIT_COUNT + 1) << 0x4
+        count |= self.get_mem(SystemLayout.WAIT_COUNT + 2) << 0x8
+        count |= self.get_mem(SystemLayout.WAIT_COUNT + 3) << 0xC
+        return count
+
+    def set_wait_count(self, wait_count: int) -> None:
+        self.set_mem(SystemLayout.WAIT_COUNT + 0, (wait_count >> 0x0) & 0xF)
+        self.set_mem(SystemLayout.WAIT_COUNT + 1, (wait_count >> 0x4) & 0xF)
+        self.set_mem(SystemLayout.WAIT_COUNT + 2, (wait_count >> 0x8) & 0xF)
+        self.set_mem(SystemLayout.WAIT_COUNT + 3, (wait_count >> 0xC) & 0xF)
 
     def _inc_reg(self, register: Register) -> None:
         self.set_reg(register, (self.get_reg(register) + 1) & 0xFF)
@@ -577,8 +589,8 @@ class VirtualMachine:
                 self.set_reg(Register.F, 1)
             case ServiceCall.WAIT:
                 val = self.get_reg(Register.A) + 1
-                # wait = val * self.HZ / 10
-                # self.set_mem(SystemLayout.WAIT_COUNT, wait)
+                wait = val * self.HZ // 10
+                self.set_wait_count(wait)
                 self.set_reg(Register.F, 1)
             case ServiceCall.TURN_ON_MEMORY:
                 val = self.get_mem(0x5E) | ((self.get_mem(0x5F) & 0x7) << 4)

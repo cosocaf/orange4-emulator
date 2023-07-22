@@ -1,4 +1,5 @@
 import re
+import threading
 
 from textual.app import App, ComposeResult
 from textual.reactive import reactive
@@ -101,9 +102,9 @@ class Board(Static):
     def update_binary_led(self, value) -> None:
         for i in range(7):
             if value & (1 << i) == 0:
-                self._led_elems[i].styles.color = "white"
+                self._led_elems[6 - i].styles.color = "white"
             else:
-                self._led_elems[i].styles.color = "red"
+                self._led_elems[6 - i].styles.color = "red"
 
 
 class VirtualMachineController(Static):
@@ -147,12 +148,6 @@ class VirtualMachineController(Static):
 
         def render(self) -> str:
             return f"{self.value:X}"
-
-        def watch_value(self, old, new):
-            if old == new:
-                self.styles.background = "skyblue 0%"
-            else:
-                self.styles.background = "skyblue 50%"
 
     class RegisterItem(Widget):
         reg = reactive("")
@@ -279,6 +274,9 @@ class VirtualMachineMonitor(App):
     def __init__(self, vm: VirtualMachine):
         super().__init__()
         self.vm = vm
+        self.vm_thread = None
+        self.vm_thread_event = threading.Event()
+        self.vm_lock = threading.Lock()
 
     def step(self):
         self.vm.cycle()
@@ -295,31 +293,34 @@ class VirtualMachineMonitor(App):
 
     def on_mount(self) -> None:
         self.update()
-        self.runner = self.set_interval(1 / self.vm.HZ, self.step, pause=True)
+        self.set_interval(1 / 60, self.update)
 
     def update(self) -> None:
-        self._monitor_pane.set_numeric_led_value(self.vm.get_numeric_led())
-        self._monitor_pane.set_binary_led_value(self.vm.get_binary_led())
+        with self.vm_lock:
+            num_led = self.vm.get_numeric_led()
+            bin_led = self.vm.get_binary_led()
 
-        mem = [0] * 0x100
-        for i in range(0x100):
-            if i % 2 == 0:
-                mem[i] = (self.vm.data[i // 2] >> 4) & 0xF
-            else:
-                mem[i] = self.vm.data[i // 2] & 0xF
+            mem = [0] * 0x100
+            for i in range(0x100):
+                if i % 2 == 0:
+                    mem[i] = (self.vm.data[i // 2] >> 4) & 0xF
+                else:
+                    mem[i] = self.vm.data[i // 2] & 0xF
 
-        reg_a = self.vm.get_reg(Register.A)
-        reg_b = self.vm.get_reg(Register.B)
-        reg_y = self.vm.get_reg(Register.Y)
-        reg_z = self.vm.get_reg(Register.Z)
-        reg_a2 = self.vm.get_reg(Register.A2)
-        reg_b2 = self.vm.get_reg(Register.B2)
-        reg_y2 = self.vm.get_reg(Register.Y2)
-        reg_z2 = self.vm.get_reg(Register.Z2)
-        reg_f = self.vm.get_reg(Register.F)
-        reg_pc = self.vm.get_reg(Register.PC)
-        reg_sp = self.vm.get_reg(Register.SP)
+            reg_a = self.vm.get_reg(Register.A)
+            reg_b = self.vm.get_reg(Register.B)
+            reg_y = self.vm.get_reg(Register.Y)
+            reg_z = self.vm.get_reg(Register.Z)
+            reg_a2 = self.vm.get_reg(Register.A2)
+            reg_b2 = self.vm.get_reg(Register.B2)
+            reg_y2 = self.vm.get_reg(Register.Y2)
+            reg_z2 = self.vm.get_reg(Register.Z2)
+            reg_f = self.vm.get_reg(Register.F)
+            reg_pc = self.vm.get_reg(Register.PC)
+            reg_sp = self.vm.get_reg(Register.SP)
 
+        self._monitor_pane.set_numeric_led_value(num_led)
+        self._monitor_pane.set_binary_led_value(bin_led)
         self._monitor_pane.set_memory(mem)
         self._monitor_pane.set_register("a", reg_a)
         self._monitor_pane.set_register("b", reg_b)
@@ -335,6 +336,7 @@ class VirtualMachineMonitor(App):
         self._monitor_pane.set_last_inst(self.vm.last_inst)
 
     def action_quit(self) -> None:
+        self._stop()
         self.exit()
 
     def on_button_pressed(self, event: Button.Pressed):
@@ -345,11 +347,12 @@ class VirtualMachineMonitor(App):
             cmd = event.button.id[9:]
             match cmd:
                 case "step":
-                    self.step()
+                    if self.vm_thread is None:
+                        self.step()
                 case "run":
-                    self.runner.resume()
+                    self._start()
                 case "stop":
-                    self.runner.pause()
+                    self._stop()
         else:
             cmd = event.button.id[4:]
             match cmd:
@@ -361,3 +364,22 @@ class VirtualMachineMonitor(App):
                     pass
                 case "rst":
                     pass
+
+    def _start(self):
+        if self.vm_thread is None:
+            self.vm_thread = threading.Thread(target=self._run)
+            self.vm_thread.start()
+
+    def _stop(self):
+        if self.vm_thread is not None:
+            self.vm_thread_event.set()
+            self.vm_thread.join()
+            self.vm_thread = None
+            self.vm_thread_event.clear()
+
+    def _run(self):
+        while not self.vm_thread_event.is_set():
+            with self.vm_lock:
+                self.vm.cycle()
+                self.vm.release_all_key()
+            self.vm_thread_event.wait(1 / self.vm.HZ)
